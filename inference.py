@@ -161,7 +161,7 @@ async def main() -> None:
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
     
     try:
-        result = await maybe_await(env.reset())
+        result = await maybe_await(env.reset(task_id=TASK_NAME))
         last_reward = 0.0
         
         for step in range(1, MAX_STEPS + 1):
