@@ -14,7 +14,9 @@ API_KEY = os.getenv("HF_TOKEN") or os.getenv("OPENAI_API_KEY")
 API_BASE_URL = os.getenv("API_BASE_URL", "https://api.openai.com/v1")
 MODEL_NAME = os.getenv("MODEL_NAME", "gpt-4o-mini") # Use a fast/cheap model for baseline
 
-TASK_NAME = os.getenv("MY_ENV_V4_TASK", "minor-delay") # Change this to test other tasks
+KNOWN_TASKS = ("minor-delay", "port-strike", "network-collapse")
+TASK_NAME = os.getenv("MY_ENV_V4_TASK")
+TASKS_CSV = os.getenv("MY_ENV_V4_TASKS", ",".join(KNOWN_TASKS))
 BENCHMARK = os.getenv("MY_ENV_V4_BENCHMARK", "resilientops")
 
 MAX_STEPS = 14
@@ -45,6 +47,29 @@ def log_step(step: int, action: str, reward: float, done: bool, error: Optional[
 def log_end(success: bool, steps: int, score: float, rewards: List[float]) -> None:
     rewards_str = ",".join(f"{r:.2f}" for r in rewards)
     print(f"[END] success={str(success).lower()} steps={steps} score={score:.3f} rewards={rewards_str}", flush=True)
+
+
+def resolve_tasks() -> List[str]:
+    """Resolve evaluation task set, defaulting to all known tasks."""
+
+    if TASK_NAME:
+        selected = [TASK_NAME]
+    else:
+        selected = [t.strip() for t in TASKS_CSV.split(",") if t.strip()]
+
+    deduped: List[str] = []
+    for task in selected:
+        if task not in KNOWN_TASKS:
+            raise ValueError(
+                f"Unknown task '{task}'. Supported tasks: {', '.join(KNOWN_TASKS)}"
+            )
+        if task not in deduped:
+            deduped.append(task)
+
+    if not deduped:
+        raise ValueError("No tasks selected for inference run.")
+
+    return deduped
 
 def build_user_prompt(step: int, obs: dict, last_reward: float) -> str:
     return textwrap.dedent(
@@ -139,6 +164,71 @@ async def maybe_await(value):
         return await value
     return value
 
+async def run_episode(task_name: str, client: Optional[OpenAI]) -> None:
+    """Run one task episode and emit required structured logs."""
+
+    env = ResilientOpsEnv()
+    rewards: List[float] = []
+    steps_taken = 0
+    score = 0.0
+    success = False
+
+    log_start(task=task_name, env=BENCHMARK, model=MODEL_NAME)
+
+    try:
+        result = await maybe_await(env.reset(task_id=task_name))
+        last_reward = 0.0
+
+        for step in range(1, MAX_STEPS + 1):
+            if result.done:
+                break
+
+            obs_dict = result.observation.model_dump()
+            action_json_str = get_model_action(client, step, obs_dict, last_reward)
+
+            try:
+                action_dict = json.loads(action_json_str)
+                action_obj = ResilientOpsAction(**action_dict)
+                result = await maybe_await(env.step(action_obj))
+                reward = result.reward.value or 0.0
+                error = None
+            except Exception as e:
+                reward = -1.0
+                error = str(e)
+                result = await maybe_await(
+                    env.step(
+                        ResilientOpsAction(
+                            supplier_id="sup_alpha",
+                            product_id="microchip",
+                            quantity=0,
+                            transport_mode="STANDARD",
+                        )
+                    )
+                )
+
+            done = result.done
+            rewards.append(reward)
+            steps_taken = step
+            last_reward = reward
+
+            action_log = action_json_str.replace('\n', '').replace('\r', '')
+            log_step(step=step, action=action_log, reward=reward, done=done, error=error)
+
+            if done:
+                score = float(result.info.get("final_score", 0.0))
+                break
+
+        success = score >= SUCCESS_SCORE_THRESHOLD
+
+    finally:
+        try:
+            await maybe_await(env.close())
+        except Exception as e:
+            print(f"[DEBUG] env.close() error: {e}", flush=True)
+
+        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+
 async def main() -> None:
     client: Optional[OpenAI] = None
     if API_KEY:
@@ -149,63 +239,10 @@ async def main() -> None:
             print("[DEBUG] Falling back to deterministic policy", flush=True)
     else:
         print("[DEBUG] Missing API key; falling back to deterministic policy", flush=True)
-    
-    # 2. INITIALIZE YOUR SPECIFIC ENVIRONMENT
-    env = ResilientOpsEnv() 
-    
-    rewards: List[float] = []
-    steps_taken = 0
-    score = 0.0
-    success = False
-    
-    log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
-    
-    try:
-        result = await maybe_await(env.reset(task_id=TASK_NAME))
-        last_reward = 0.0
-        
-        for step in range(1, MAX_STEPS + 1):
-            if result.done:
-                break
-                
-            obs_dict = result.observation.model_dump()
-            action_json_str = get_model_action(client, step, obs_dict, last_reward)
-            
-            try:
-                action_dict = json.loads(action_json_str)
-                # 3. USE YOUR ACTION MODEL
-                action_obj = ResilientOpsAction(**action_dict)
-                result = await maybe_await(env.step(action_obj))
-                reward = result.reward.value or 0.0 # Pulling the normalized clamped value
-                error = None
-            except Exception as e:
-                reward = -1.0 
-                error = str(e)
-                # Apply a blank step to keep time moving
-                result = await maybe_await(env.step(ResilientOpsAction(supplier_id="sup_alpha", product_id="microchip", quantity=0, transport_mode="STANDARD")))
-            
-            done = result.done
-            rewards.append(reward)
-            steps_taken = step
-            last_reward = reward
-            
-            action_log = action_json_str.replace('\n', '').replace('\r', '')
-            log_step(step=step, action=action_log, reward=reward, done=done, error=error)
-            
-            if done:
-                # Capture the final grader score from the info dictionary
-                score = result.info.get("final_score", 0.0)
-                break
-                
-        success = score >= SUCCESS_SCORE_THRESHOLD
-        
-    finally:
-        try:
-            await maybe_await(env.close())
-        except Exception as e:
-            print(f"[DEBUG] env.close() error: {e}", flush=True)
-            
-        log_end(success=success, steps=steps_taken, score=score, rewards=rewards)
+
+    tasks = resolve_tasks()
+    for task_name in tasks:
+        await run_episode(task_name=task_name, client=client)
 
 if __name__ == "__main__":
     asyncio.run(main())

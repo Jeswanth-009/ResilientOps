@@ -19,4 +19,27 @@ observation:
   class_name: ResilientOpsObservation
   module: env
 
+tasks:
+  - id: minor-delay
+    name: Minor Delay
+    difficulty: easy
+    grader:
+      type: deterministic
+      score_range: "(0,1)"
+      formula: "score = 1 - 0.2 * stockout_days"
+  - id: port-strike
+    name: Port Strike
+    difficulty: medium
+    grader:
+      type: deterministic
+      score_range: "(0,1)"
+      formula: "score = 0.75 * fill_rate + 0.25 * cost_efficiency"
+  - id: network-collapse
+    name: Network Collapse
+    difficulty: hard
+    grader:
+      type: deterministic
+      score_range: "(0,1)"
+      formula: "score = (agent_profit - baseline_profit) / (oracle_profit - baseline_profit)"
+
 default_image: resilientops:latest
