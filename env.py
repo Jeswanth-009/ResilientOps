@@ -83,6 +83,7 @@ class ResilientOpsAction(BaseModel):
     product_id: str = Field(..., min_length=1)
     quantity: int = Field(..., ge=0, le=10_000)
     transport_mode: Literal["STANDARD", "AIR"]
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class TransitShipment(BaseModel):
@@ -109,6 +110,9 @@ class ResilientOpsObservation(BaseModel):
     in_transit_shipments: List[TransitShipment]
     active_crisis_alerts: List[str]
     daily_demand: Dict[str, Dict[str, int]]
+    done: bool = False
+    reward: Optional[float] = None
+    metadata: Dict[str, Any] = Field(default_factory=dict)
 
 
 class ResilientOpsReward(BaseModel):
@@ -394,6 +398,18 @@ class ResilientOpsEnv(OpenEnvEnvironment):
             },
         )
 
+    async def reset_async(
+        self,
+        seed: Optional[int] = None,
+        episode_id: Optional[str] = None,
+        task_id: TaskId = "minor-delay",
+        **_: Any,
+    ) -> ResilientOpsObservation:
+        """OpenEnv server compatibility: return an Observation-shaped payload."""
+
+        result = await self.reset(task_id=task_id, seed=seed, episode_id=episode_id)
+        return self._as_openenv_observation(result)
+
     async def step(self, action: ResilientOpsAction) -> ResilientOpsStepResult:
         """Advance the simulation by exactly one day.
 
@@ -502,7 +518,20 @@ class ResilientOpsEnv(OpenEnvEnvironment):
             info=info,
         )
 
-    async def state(self) -> ResilientOpsState:
+    async def step_async(
+        self,
+        action: ResilientOpsAction,
+        timeout_s: Optional[float] = None,
+        **_: Any,
+    ) -> ResilientOpsObservation:
+        """OpenEnv server compatibility: return an Observation-shaped payload."""
+
+        del timeout_s
+        result = await self.step(action)
+        return self._as_openenv_observation(result)
+
+    @property
+    def state(self) -> ResilientOpsState:
         """Return a full deterministic state snapshot."""
 
         if self._episode_id == "":
@@ -528,6 +557,11 @@ class ResilientOpsEnv(OpenEnvEnvironment):
             done=self._done,
             grader_score=self.grade(),
         )
+
+    async def state_async(self) -> ResilientOpsState:
+        """Async state accessor for callers that use await semantics."""
+
+        return self.state
 
     # -----------------------------
     # Task graders (deterministic)
@@ -874,6 +908,18 @@ class ResilientOpsEnv(OpenEnvEnvironment):
             daily_demand=self._copy_demand(),
         )
 
+    @staticmethod
+    def _as_openenv_observation(result: ResilientOpsStepResult) -> ResilientOpsObservation:
+        """Convert internal step result into OpenEnv observation contract."""
+
+        return result.observation.model_copy(
+            update={
+                "done": result.done,
+                "reward": float(result.reward.value),
+                "metadata": dict(result.info),
+            }
+        )
+
     def _copy_inventory(self) -> Dict[str, Dict[str, int]]:
         return {
             warehouse: {product: int(value) for product, value in product_map.items()}
@@ -911,8 +957,8 @@ class ResilientOpsEnv(OpenEnvEnvironment):
     def _clamp01(value: float) -> float:
         return max(0.0, min(1.0, float(value)))
 
-    async def close(self) -> None:
-        """Clean up resources. Required by the OpenEnv async interface."""
+    def close(self) -> None:
+        """Clean up resources. Required by the OpenEnv server interface."""
         pass
 __all__ = [
     "ResilientOpsAction",

@@ -12,8 +12,15 @@ dependencies = [
     "openenv-core",
     "pydantic",
     "fastapi",
-    "uvicorn"
+    "uvicorn",
+    "openai"
 ]
 
 [project.scripts]
 server = "server.app:main"
+
+[tool.setuptools]
+py-modules = ["env"]
+
+[tool.setuptools.packages.find]
+include = ["server*"]

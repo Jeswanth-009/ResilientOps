@@ -2,7 +2,8 @@ import asyncio
 import os
 import textwrap
 import json
-from typing import List, Optional
+import inspect
+from typing import Any, List, Optional
 from openai import OpenAI
 
 # 1. IMPORT YOUR ACTUAL ENVIRONMENT HERE
@@ -55,7 +56,63 @@ def build_user_prompt(step: int, obs: dict, last_reward: float) -> str:
         """
     ).strip()
 
-def get_model_action(client: OpenAI, step: int, obs: dict, last_reward: float) -> str:
+def build_fallback_action(step: int, obs: dict) -> str:
+    """Deterministic policy used when model calls are unavailable."""
+
+    demand = obs.get("daily_demand", {})
+    inventory = obs.get("warehouse_inventory", {})
+    alerts = " ".join(obs.get("active_crisis_alerts", []))
+
+    microchip_demand = 0
+    battery_demand = 0
+    microchip_inventory = 0
+    battery_inventory = 0
+
+    for warehouse in demand.values():
+        if isinstance(warehouse, dict):
+            microchip_demand += int(warehouse.get("microchip", 0) or 0)
+            battery_demand += int(warehouse.get("battery", 0) or 0)
+
+    for warehouse in inventory.values():
+        if isinstance(warehouse, dict):
+            microchip_inventory += int(warehouse.get("microchip", 0) or 0)
+            battery_inventory += int(warehouse.get("battery", 0) or 0)
+
+    product_id = "microchip" if microchip_demand >= battery_demand else "battery"
+
+    if product_id == "microchip":
+        supplier_id = "sup_beta" if step % 3 == 0 else "sup_alpha"
+        product_demand = microchip_demand
+        product_inventory = microchip_inventory
+    else:
+        supplier_id = "sup_gamma" if step % 2 == 0 else "sup_alpha"
+        product_demand = battery_demand
+        product_inventory = battery_inventory
+
+    quantity = int(max(0, min(140, (product_demand * 2) - int(product_inventory * 0.30))))
+
+    # Keep ordering aggressive when network collapse starts.
+    if "network-collapse" in alerts and step >= 5:
+        quantity = max(quantity, 100)
+
+    transport_mode = "STANDARD"
+    if "port-strike" in alerts and 4 <= step <= 9:
+        transport_mode = "AIR"
+
+    return json.dumps(
+        {
+            "supplier_id": supplier_id,
+            "product_id": product_id,
+            "quantity": quantity,
+            "transport_mode": transport_mode,
+        }
+    )
+
+
+def get_model_action(client: Optional[OpenAI], step: int, obs: dict, last_reward: float) -> str:
+    if client is None:
+        return build_fallback_action(step, obs)
+
     user_prompt = build_user_prompt(step, obs, last_reward)
     try:
         completion = client.chat.completions.create(
@@ -72,11 +129,26 @@ def get_model_action(client: OpenAI, step: int, obs: dict, last_reward: float) -
         return (completion.choices[0].message.content or "").strip()
     except Exception as exc:
         print(f"[DEBUG] Model request failed: {exc}", flush=True)
-        # Fallback action if API fails
-        return '{"supplier_id": "sup_alpha", "product_id": "microchip", "quantity": 0, "transport_mode": "STANDARD"}'
+        return build_fallback_action(step, obs)
+
+
+async def maybe_await(value):
+    """Handle both sync and async environment methods."""
+
+    if inspect.isawaitable(value):
+        return await value
+    return value
 
 async def main() -> None:
-    client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+    client: Optional[OpenAI] = None
+    if API_KEY:
+        try:
+            client = OpenAI(base_url=API_BASE_URL, api_key=API_KEY)
+        except Exception as exc:
+            print(f"[DEBUG] OpenAI client init failed: {exc}", flush=True)
+            print("[DEBUG] Falling back to deterministic policy", flush=True)
+    else:
+        print("[DEBUG] Missing API key; falling back to deterministic policy", flush=True)
     
     # 2. INITIALIZE YOUR SPECIFIC ENVIRONMENT
     env = ResilientOpsEnv() 
@@ -89,7 +161,7 @@ async def main() -> None:
     log_start(task=TASK_NAME, env=BENCHMARK, model=MODEL_NAME)
     
     try:
-        result = await env.reset()
+        result = await maybe_await(env.reset())
         last_reward = 0.0
         
         for step in range(1, MAX_STEPS + 1):
@@ -103,14 +175,14 @@ async def main() -> None:
                 action_dict = json.loads(action_json_str)
                 # 3. USE YOUR ACTION MODEL
                 action_obj = ResilientOpsAction(**action_dict)
-                result = await env.step(action_obj)
+                result = await maybe_await(env.step(action_obj))
                 reward = result.reward.value or 0.0 # Pulling the normalized clamped value
                 error = None
             except Exception as e:
                 reward = -1.0 
                 error = str(e)
                 # Apply a blank step to keep time moving
-                result = await env.step(ResilientOpsAction(supplier_id="sup_alpha", product_id="microchip", quantity=0, transport_mode="STANDARD"))
+                result = await maybe_await(env.step(ResilientOpsAction(supplier_id="sup_alpha", product_id="microchip", quantity=0, transport_mode="STANDARD")))
             
             done = result.done
             rewards.append(reward)
@@ -129,7 +201,7 @@ async def main() -> None:
         
     finally:
         try:
-            await env.close()
+            await maybe_await(env.close())
         except Exception as e:
             print(f"[DEBUG] env.close() error: {e}", flush=True)
             
