@@ -1,0 +1,22 @@
+spec_version: 1
+name: resilientops
+version: 0.1.0
+description: Deterministic global supply chain crisis simulator with dense rewards and clamped graders.
+type: space
+runtime: python
+app: env:ResilientOpsEnv
+port: 7860
+
+client:
+  class_name: ResilientOpsEnv
+  module: env
+
+action:
+  class_name: ResilientOpsAction
+  module: env
+
+observation:
+  class_name: ResilientOpsObservation
+  module: env
+
+default_image: resilientops:latest
