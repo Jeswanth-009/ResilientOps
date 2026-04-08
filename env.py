@@ -36,6 +36,8 @@ STOCKOUT_PENALTY_PER_UNIT: float = 20.0
 # This scale converts raw dollar profit/loss into a stable RL training signal.
 # Any value beyond this range is clipped to [-1, 1].
 DAILY_REWARD_NORMALIZATION_SCALE: float = 5000.0
+# Phase-2 validators require strict open interval task scores: 0 < score < 1.
+GRADER_EPSILON: float = 0.001
 
 WAREHOUSES: Tuple[str, ...] = ("na_hub", "eu_hub", "apac_hub")
 PRODUCTS: Tuple[str, ...] = ("microchip", "battery")
@@ -568,7 +570,7 @@ class ResilientOpsEnv(OpenEnvEnvironment):
     # -----------------------------
 
     def grade(self) -> float:
-        """Dispatch to task-specific grader and return score in [0.0, 1.0]."""
+        """Dispatch to task-specific grader and return score in (0.0, 1.0)."""
 
         if self._task_id == "minor-delay":
             return self._grade_minor_delay()
@@ -619,7 +621,7 @@ class ResilientOpsEnv(OpenEnvEnvironment):
         Hard-task score uses normalized net profit against deterministic bounds:
             score = (agent_profit - baseline_profit) / (oracle_profit - baseline_profit)
 
-        Output is strictly clamped to [0.0, 1.0].
+        Output is strictly clamped to (0.0, 1.0).
         """
 
         agent_profit = float(self._metrics["cumulative_profit"])
@@ -955,7 +957,7 @@ class ResilientOpsEnv(OpenEnvEnvironment):
 
     @staticmethod
     def _clamp01(value: float) -> float:
-        return max(0.0, min(1.0, float(value)))
+        return max(GRADER_EPSILON, min(1.0 - GRADER_EPSILON, float(value)))
 
     def close(self) -> None:
         """Clean up resources. Required by the OpenEnv server interface."""
