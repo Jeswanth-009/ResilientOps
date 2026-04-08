@@ -8,10 +8,11 @@ WORKDIR /app
 
 COPY . /app
 
+# Added fastapi and uvicorn to the install list
 RUN pip install --upgrade pip && \
-    pip install openenv-core pydantic openai
+    pip install openenv-core pydantic openai fastapi uvicorn
 
 EXPOSE 7860
 
-# Keep the container alive on the expected Hugging Face Spaces port.
-CMD ["python", "-m", "http.server", "7860"]
+# Run the actual OpenEnv server app, NOT the static file server
+CMD ["python", "server/app.py"]
