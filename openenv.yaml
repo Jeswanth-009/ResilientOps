@@ -1,7 +1,7 @@
 spec_version: 1
 name: resilientops
-version: 0.1.0
-description: Deterministic global supply chain crisis simulator with dense rewards and clamped graders.
+version: 0.2.0
+description: Deterministic global supply chain simulator with ordering, transfer, assembly, and enterprise-priority decisions.
 type: space
 runtime: python
 app: env:ResilientOpsEnv
@@ -26,20 +26,20 @@ tasks:
     grader:
       type: deterministic
       score_range: "(0,1)"
-      formula: "score = 1 - 0.2 * stockout_days"
+      formula: "score = 0.60 * fill_rate + 0.40 * cost_efficiency"
   - id: port-strike
     name: Port Strike
     difficulty: medium
     grader:
       type: deterministic
       score_range: "(0,1)"
-      formula: "score = 0.75 * fill_rate + 0.25 * cost_efficiency"
-  - id: network-collapse
-    name: Network Collapse
+      formula: "score = 0.35 * fill_rate + 0.30 * enterprise_sla + 0.20 * cost_efficiency + 0.15 * transfer_usage"
+  - id: cascading-failures
+    name: Cascading Failures
     difficulty: hard
     grader:
       type: deterministic
       score_range: "(0,1)"
-      formula: "score = (agent_profit - baseline_profit) / (oracle_profit - baseline_profit)"
+      formula: "score = 0.35 * profit_score + 0.25 * enterprise_sla + 0.20 * fill_rate + 0.10 * assembly_score + 0.10 * cost_mgmt"
 
 default_image: resilientops:latest

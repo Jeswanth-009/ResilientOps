@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "resilientops"
-version = "0.1.0"
-description = "Global supply chain crisis simulator for OpenEnv"
+version = "0.2.0"
+description = "Global supply chain operations simulator for OpenEnv (v2)"
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
